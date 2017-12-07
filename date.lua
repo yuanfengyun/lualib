@@ -17,8 +17,8 @@ end
 function M.is_same_day(t1, t2, time_zone)
     local offset_seconds = M.get_time_zone_seconds(time_zone)
 
-    local day_num1 = math.floor((t1 - offset_seconds) / SECONDS_OF_DAY)
-    local day_num2 = math.floor((t2 - offset_seconds) / SECONDS_OF_DAY)
+    local day_num1 = math.floor((t1 + offset_seconds) / SECONDS_OF_DAY)
+    local day_num2 = math.floor((t2 + offset_seconds) / SECONDS_OF_DAY)
 
     return day_num1 == day_num2
 end
