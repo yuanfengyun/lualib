@@ -9,6 +9,20 @@
 
 #define uchar(c)	((unsigned char)(c))
 
+/*
+#define LUA_TNONE		(-1)
+#define LUA_TNIL		0
+#define LUA_TBOOLEAN		1
+#define LUA_TLIGHTUSERDATA	2
+#define LUA_TNUMBER		3
+#define LUA_TSTRING		4
+#define LUA_TTABLE		5
+#define LUA_TFUNCTION		6
+#define LUA_TUSERDATA		7
+#define LUA_TTHREAD		8
+#define LUA_NUMTYPES		9
+*/
+
 typedef struct WriteBuffer {
     size_t size;
     size_t head;
@@ -38,7 +52,6 @@ static int
 bufer_write(lua_State* L, const char *str, size_t len, Buffer *buf)
 {
     if (len > UINT32_MAX) {
-        bufer_free(L, buf);
         luaL_error(L, "buffer too long!");
     }
     if (buf->size - buf->head < len) {
@@ -49,7 +62,6 @@ bufer_write(lua_State* L, const char *str, size_t len, Buffer *buf)
         }
         char * p = NULL;
         if (!(p = realloc(buf->data, new_size))) {
-            bufer_free(L, buf);
             luaL_error(L, "Out of memory!");
         }
         buf->data = p;
@@ -72,7 +84,6 @@ bufer_write_char(lua_State* L, char str, Buffer *buf)
         }
         char * p = NULL;
         if (!(p = realloc(buf->data, new_size))) {
-            bufer_free(L, buf);
             luaL_error(L, "Out of memory!");
         }
         buf->data = p;
@@ -138,9 +149,10 @@ buffer_write_number(lua_State *L, int index, Buffer *buf) {
 
 static void
 buffer_write_point(lua_State *L, int index, Buffer *buf) {
-    const char * str = lua_pushfstring(L, "%s: %p", luaL_typename(L, index), lua_topointer(L, index));
-    bufer_write(L, str, strlen(str), buf);
-    lua_pop(L, 1);
+	char tmp[128];
+	memset(tmp,0,sizeof(tmp));
+    sprintf(tmp,"\"%s: %p\"", luaL_typename(L, index), lua_topointer(L, index));
+    bufer_write(L, tmp, strlen(tmp), buf);
 }
 
 static void
@@ -152,16 +164,52 @@ append_table(lua_State *L, int index, Buffer *buf, int ele_cnt) {
 		return;
 	}
 	
-    lua_pushnil(L);
-    while (lua_next(L, -2) != 0) {
-		bufer_write_char(L, '[', buf);
-		append_val(L, -2, buf, ele_cnt);
-		bufer_write(L, "]=", 2, buf); 
+    int base = lua_gettop(L);
+	if(index < 0){
+		index = base + index + 1;
+	}
 
-        append_val(L, -1, buf, ele_cnt);
-        bufer_write_char(L, ',', buf);
-        lua_pop(L, 1);
-    }
+	if (luaL_getmetafield(L, index, "__pairs") == LUA_TNIL) {  /* no metamethod? */
+		lua_pushnil(L);
+		while (lua_next(L, index) != 0) {
+			lua_pushvalue(L, -2);
+			bufer_write_char(L, '[', buf);
+			append_val(L, -2, buf, ele_cnt);
+			bufer_write(L, "]=", 2, buf); 
+            lua_pop(L, 1);
+
+			append_val(L, -1, buf, ele_cnt);
+			bufer_write_char(L, ',', buf);
+			lua_pop(L, 1);
+		}
+	}else{
+		int top,iter_func,iter_table,iter_key;
+		lua_pushvalue(L, index); /* argument 'self' to metamethod */
+		lua_call(L, 1, 3);    /* get 3 values from metamethod */
+		top = lua_gettop(L);
+		iter_func = top - 2;
+		iter_table = top - 1;
+		iter_key = top;
+		for(;;) {
+			lua_pushvalue(L, iter_func);
+			lua_pushvalue(L, iter_table);
+			lua_pushvalue(L, -3);
+			lua_call(L, 2, 2);
+			int type = lua_type(L, -2);
+			if (type == LUA_TNIL) {
+				lua_settop(L,base);
+				break;
+			}
+			lua_pushvalue(L, -2);
+			bufer_write_char(L, '[', buf);
+			append_val(L, -1, buf, ele_cnt);
+			bufer_write(L, "]=", 2, buf);
+			lua_pop(L, 1);
+			append_val(L, -1, buf, ele_cnt);
+			bufer_write_char(L, ',', buf);
+			lua_pop(L, 1);
+		}
+	}
     bufer_write_char(L, '}',  buf);
 }
 
@@ -178,7 +226,7 @@ append_val(lua_State *L, int index, Buffer *buf, int ele_cnt) {
             break;
         }
         case LUA_TTABLE:{
-            append_table(L, index, buf, ele_cnt-1); 
+            append_table(L, index, buf, ele_cnt-1);
             break;
         }
         case LUA_TBOOLEAN:{
@@ -197,16 +245,27 @@ append_val(lua_State *L, int index, Buffer *buf, int ele_cnt) {
 }
 
 static int 
-lencode(lua_State *L) {
-    if (!lua_istable(L, -1)) {
-        lua_pushnil(L);
-        return 1; 
-	}
+encode(lua_State *L) {
+	struct Buffer *buf = lua_touserdata(L, 2);
+	int ele_cnt = 20;
+	append_val(L, 1, buf, ele_cnt);
+	return 0;
+}
 
+static int
+lencode(lua_State *L) {
+	lua_settop(L,1);
+	luaL_checktype(L, 1, LUA_TTABLE);
+	
 	Buffer buf;
 	buffer_init(L, &buf);
-	int ele_cnt = 200;
-	append_val(L, -1, &buf, ele_cnt);
+	lua_pushcfunction(L, encode);
+	lua_pushvalue(L, 1);
+	lua_pushlightuserdata(L, &buf);
+	if (lua_pcall(L, 2, 1, 0) != LUA_OK) {
+		bufer_free(L, &buf);
+		return lua_error(L);
+	}
 	lua_pushlstring(L, buf.data, buf.head);
 	bufer_free(L, &buf);
 	return 1;
@@ -220,4 +279,3 @@ LUALIB_API int luaopen_serialize(lua_State *L) {
     luaL_newlib(L, libs);
     return 1;
 }
-
