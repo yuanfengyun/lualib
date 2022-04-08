@@ -30,7 +30,7 @@ typedef struct WriteBuffer {
 } Buffer;
 
 static void append_table(lua_State *L, int index, Buffer *buf, int ele_cnt);
-static void append_val(lua_State *L, int index, Buffer *buf, int elecnt);
+static void append_val(lua_State *L, int index, Buffer *buf, int elecnt, int is_key);
 
 static void 
 buffer_init(lua_State *L, Buffer *buf)
@@ -129,6 +129,29 @@ buffer_write_string(lua_State *L, int index, Buffer *buf) {
     bufer_write_char(L, '\"', buf);
 }
 
+static void
+buffer_write_string_key(lua_State *L, int index, Buffer *buf) {
+    size_t len;
+    const char *s = lua_tolstring(L, index, &len);
+	int is_key = 1;
+	for(int i=0;i<len;i++){
+	    char c = s[i];
+		if( c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || i>0 && c >= '0' && c <= '9' || c == '_' ) continue;
+		is_key = 0;
+		break;
+	}
+	
+	if(len > 0 && is_key){
+	    bufer_write(L, s, len, buf);
+		bufer_write_char(L, '=', buf);
+		return;
+	}
+	
+    bufer_write_char(L, '[', buf);
+    buffer_write_string(L,index,buf);
+    bufer_write(L, "]=", 2, buf);
+}
+
 #define MAXNUMBER2STR	44
 static void
 buffer_write_number(lua_State *L, int index, Buffer *buf) {
@@ -140,8 +163,8 @@ buffer_write_number(lua_State *L, int index, Buffer *buf) {
     } else {
         len = lua_number2str(buff, MAXNUMBER2STR, lua_tonumber(L, index));
         if (buff[strspn(buff, "-0123456789")] == '\0') {  /* looks like an int? */
-        buff[len++] = '.';
-        buff[len++] = '0';  /* adds '.0' to result */
+            buff[len++] = '.';
+            buff[len++] = '0';  /* adds '.0' to result */
         }
         bufer_write(L, buff, len, buf);
     }
@@ -170,20 +193,24 @@ append_table(lua_State *L, int index, Buffer *buf, int ele_cnt) {
 	}
 
 	if (luaL_getmetafield(L, index, "__pairs") == LUA_TNIL) {  /* no metamethod? */
+	    int first = 1;
 		lua_pushnil(L);
 		while (lua_next(L, index) != 0) {
+			if(!first){
+			    bufer_write_char(L, ',', buf);
+			}else{
+			    first = 0;
+			}
 			lua_pushvalue(L, -2);
-			bufer_write_char(L, '[', buf);
-			append_val(L, -2, buf, ele_cnt);
-			bufer_write(L, "]=", 2, buf); 
+			append_val(L, -1, buf, ele_cnt, 1);
             lua_pop(L, 1);
 
-			append_val(L, -1, buf, ele_cnt);
-			bufer_write_char(L, ',', buf);
+			append_val(L, -1, buf, ele_cnt, 0);
 			lua_pop(L, 1);
 		}
 	}else{
-		int top,iter_func,iter_table,iter_key;
+		int top,iter_func,iter_table,iter_key,first = 1;
+
 		lua_pushvalue(L, index); /* argument 'self' to metamethod */
 		lua_call(L, 1, 3);    /* get 3 values from metamethod */
 		top = lua_gettop(L);
@@ -200,13 +227,15 @@ append_table(lua_State *L, int index, Buffer *buf, int ele_cnt) {
 				lua_settop(L,base);
 				break;
 			}
+			if(!first){
+			    bufer_write_char(L, ',', buf);
+			}else{
+			    first = 0;
+			}
 			lua_pushvalue(L, -2);
-			bufer_write_char(L, '[', buf);
-			append_val(L, -1, buf, ele_cnt);
-			bufer_write(L, "]=", 2, buf);
+			append_val(L, -1, buf, ele_cnt, 1);
 			lua_pop(L, 1);
-			append_val(L, -1, buf, ele_cnt);
-			bufer_write_char(L, ',', buf);
+			append_val(L, -1, buf, ele_cnt, 0);
 			lua_pop(L, 1);
 		}
 	}
@@ -214,11 +243,18 @@ append_table(lua_State *L, int index, Buffer *buf, int ele_cnt) {
 }
 
 static void
-append_val(lua_State *L, int index, Buffer *buf, int ele_cnt) {
+append_val(lua_State *L, int index, Buffer *buf, int ele_cnt, int is_key) {
     int vtype = lua_type(L, index);
+	
+	if(is_key && vtype != LUA_TSTRING){
+	    bufer_write_char(L, '[', buf);
+	}
     switch (vtype) {
         case LUA_TSTRING:{
-            buffer_write_string(L, index, buf);
+			if(is_key)
+                buffer_write_string_key(L, index, buf);
+		    else
+				buffer_write_string(L, index, buf);
             break;
         }
         case LUA_TNUMBER:{
@@ -242,13 +278,16 @@ append_val(lua_State *L, int index, Buffer *buf, int ele_cnt) {
             break;
         }
     }
+	if(is_key && vtype != LUA_TSTRING){
+	    bufer_write(L, "]=", 2, buf);
+	}
 }
 
 static int 
 encode(lua_State *L) {
 	struct Buffer *buf = lua_touserdata(L, 2);
 	int ele_cnt = 20;
-	append_val(L, 1, buf, ele_cnt);
+	append_val(L, 1, buf, ele_cnt, 0);
 	return 0;
 }
 
@@ -279,3 +318,4 @@ LUALIB_API int luaopen_serialize(lua_State *L) {
     luaL_newlib(L, libs);
     return 1;
 }
+
