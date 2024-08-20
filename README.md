@@ -13,7 +13,7 @@
 
 ## 好用工具
 
-* [lua54_debug gdb调试lua5.4 5.4 gdb拓展脚本](https://github.com/yuanfengyun/lualib/blob/master/lua54_debug.sh)
+* [lua54_debug gdb调试lua5.3 5.4 gdb拓展脚本](https://github.com/yuanfengyun/lualib/blob/master/lua54_debug.sh)
 
 * [lua-gdb gdb调试lua，python扩展，只支持python3](https://github.com/xjdrew/lua-gdb)
 
